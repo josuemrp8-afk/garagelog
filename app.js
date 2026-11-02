@@ -238,22 +238,25 @@ const views = {
     const mounted = POS.map(p => ({ p, t: v.tires.find(t => t.pos === p) }));
     const optsOf = t => ['Stored', ...POS, 'Retired'].map(p => `<option value="${p}" ${t.pos === p ? 'selected' : ''}>${POS_NAME[p]}</option>`).join('');
     return `<h2>On the car now</h2><div class="card"><div class="grid">${mounted.map(({ p, t }) =>
-      `<div><span class="mu">${POS_NAME[p]}</span><br>${t ? `<b>${esc(t.set)}</b> · ${fmt(tireMiles(v, t))} mi` : '—'}</div>`).join('')}</div></div>
-      <div class="card"><h3>Add tire</h3><form onsubmit="addTire(event)">
-        <div class="grid"><input name="set" list="sets" placeholder="Set (Winter, Summer...)" required><input name="brand" placeholder="Brand / model"></div>
+      `<div><span class="mu">${POS_NAME[p]}</span><br>${t ? `<b>${esc(t.set)}</b> · ${fmt(tireMiles(v, t))}${t.unk ? '+' : ''} mi` : '—'}</div>`).join('')}</div></div>
+      <div class="card"><h3 id="addtitle">Add tires</h3><form id="tireform" onsubmit="addTires(event)">
+        <div class="grid"><input name="set" list="sets" placeholder="Set name (Winter, Summer...)" required><input name="brand" placeholder="Brand / model"></div>
         <datalist id="sets">${sets.map(s => `<option value="${esc(s)}">`).join('')}</datalist>
         <div class="grid"><input name="size" placeholder="Size 225/45R17"><input name="dot" placeholder="DOT date (e.g. 2423)"></div>
-        <div class="grid"><input name="offset" type="number" inputmode="numeric" placeholder="Miles already on it (used)"><select name="pos"><option value="Stored">Currently: Stored</option>${POS.map(p => `<option value="${p}">Currently on: ${POS_NAME[p]}</option>`).join('')}</select></div>
-        <select name="last"><option value="">If stored: last wheel position unknown</option>${POS.map(p => `<option value="${p}">If stored: last on ${POS_NAME[p]}</option>`).join('')}</select>
-        <button>Add tire</button></form>
-        <div class="mu">Flat or worn out? On the tire's card below, press <b>Retire tire</b>, then add the new tire and pick its wheel position - its miles start from 0.</div></div>
-      ${sets.map(s => `<div class="row"><h2>${esc(s)}</h2>${v.tires.some(t => t.set === s && t.pos === 'Stored') ? `<button onclick="mountSet('${esc(s).replace(/'/g, '')}')">Put this set on the car</button>` : v.tires.some(t => t.set === s && POS.includes(t.pos)) ? `<button class="sec" onclick="storeSet('${esc(s).replace(/'/g, '')}')">Take off & store</button>` : ''}</div>` + v.tires.filter(t => t.set === s).map(t => `<div class="card"><div class="row"><h3>${esc(t.brand || 'Tire')} ${esc(t.size || '')}</h3><b>${fmt(tireMiles(v, t))} mi</b></div>
-        <div class="mu">${t.dot ? 'DOT ' + esc(t.dot) + ' · ' : ''}Offset ${fmt(t.offset || 0)} mi</div>
+        <div class="mu" style="margin-top:6px"><b>Miles already on the tires</b></div>
+        <input name="offset" type="number" inputmode="numeric" placeholder="Miles before using this app (0 if brand new)">
+        <label class="mu"><input type="checkbox" name="unk" style="width:auto" onchange="this.form.offset.disabled=this.checked"> I don't know - just count from today</label>
+        <div class="mu" style="margin-top:8px"><b>Which wheels?</b> Enter the set once - pick a status for each wheel. Leave "—" for tires you don't have (add a single replacement by choosing just one wheel).</div>
+        <div class="grid">${POS.map(p => `<label class="mu">${POS_NAME[p]}<select name="w_${p}"><option value="on">On the car now</option><option value="st">Stored (was here)</option><option value="">—</option></select></label>`).join('')}</div>
+        <button>Add tires</button></form>
+        <div class="mu">Replacing a flat? Press <b>Retire tire</b> on the old tire's card, then <b>Copy</b> on any tire of the set. The form fills in; choose the wheel and leave miles at 0 for a new tire.</div></div>
+      ${sets.map(s => `<div class="row"><h2>${esc(s)}</h2>${v.tires.some(t => t.set === s && t.pos === 'Stored') ? `<button onclick="mountSet('${esc(s).replace(/'/g, '')}')">Put this set on the car</button>` : v.tires.some(t => t.set === s && POS.includes(t.pos)) ? `<button class="sec" onclick="storeSet('${esc(s).replace(/'/g, '')}')">Take off & store</button>` : ''}</div>` + v.tires.filter(t => t.set === s).map(t => `<div class="card"><div class="row"><h3>${esc(t.brand || 'Tire')} ${esc(t.size || '')}</h3><b>${fmt(tireMiles(v, t))}${t.unk ? '+' : ''} mi</b></div>
+        <div class="mu">${t.dot ? 'DOT ' + esc(t.dot) + ' · ' : ''}${t.unk ? 'Earlier miles unknown (counting from when added)' : 'Started with ' + fmt(t.offset || 0) + ' mi'} · <a href="#" style="color:var(--ac)" onclick="editOffset('${t.id}');return false">edit</a></div>
         <div>${t.pos === 'Retired' ? '⛔ Retired' : POS.includes(t.pos) ? '📍 On car: ' + POS_NAME[t.pos] : '📦 Stored · last on: <b>' + (POS_NAME[lastPosOf(t)] || 'unknown') + '</b>'}</div>
         ${t.pos === 'Stored' && !t.hist.length ? `<select onchange="setLastPos('${t.id}',this.value)"><option value="">Set last wheel position...</option>${POS.map(p => `<option value="${p}" ${t.lastPos === p ? 'selected' : ''}>${POS_NAME[p]}</option>`).join('')}</select>` : ''}
         <select onchange="movTire('${t.id}',this.value)">${optsOf(t)}</select>
         <details><summary class="mu">Position history</summary>${t.hist.map(h => `<div class="mu">${POS_NAME[h.pos]}: ${fmt(h.start)} → ${h.end == null ? 'now' : fmt(h.end)} mi (${fmt((h.end ?? v.odo) - h.start)} mi)</div>`).join('') || '<div class="mu">Never mounted</div>'}</details>
-        ${t.pos !== 'Retired' ? `<button class="sec" onclick="retireTire('${t.id}')">Retire tire</button> ` : ''}<button class="del" onclick="delTire('${t.id}')">Delete</button></div>`).join('')).join('')}`;
+        ${t.pos !== 'Retired' ? `<button class="sec" onclick="retireTire('${t.id}')">Retire tire</button> ` : ''}<button class="sec" onclick="copyTire('${t.id}')">Copy</button> <button class="del" onclick="delTire('${t.id}')">Delete</button></div>`).join('')).join('')}`;
   },
   miles(v) {
     const ML = getMilestones(v);
@@ -329,12 +332,37 @@ function addLog(e) {
 }
 function delLog(id) { if (confirm('Delete this record?')) { const v = veh(); v.logs = v.logs.filter(l => l.id !== id); save(); render(); } }
 
-function addTire(e) {
+function addTires(e) {
   e.preventDefault();
   const f = Object.fromEntries(new FormData(e.target)), v = veh();
-  const t = { id: uid(), set: f.set.trim(), brand: f.brand, size: f.size, dot: f.dot, offset: +f.offset || 0, pos: 'Stored', lastPos: f.pos === 'Stored' ? f.last : '', hist: [] };
-  v.tires.push(t);
-  if (f.pos !== 'Stored') movTire(t.id, f.pos); else { save(); render(); }
+  const wheels = POS.filter(p => f['w_' + p]);
+  if (!wheels.length) return toast('Pick at least one wheel.');
+  const mountTo = wheels.filter(p => f['w_' + p] === 'on');
+  const busy = v.tires.filter(t => mountTo.includes(t.pos) && t.set !== f.set.trim());
+  if (busy.length && !confirm(`${busy.length} tire(s) from another set are on those wheels. Move them to Stored?`)) return;
+  busy.forEach(t => setPos(v, t, 'Stored'));
+  const replaced = v.tires.filter(t => mountTo.includes(t.pos));
+  replaced.forEach(t => setPos(v, t, 'Stored'));
+  wheels.forEach(p => {
+    const t = { id: uid(), set: f.set.trim(), brand: f.brand, size: f.size, dot: f.dot, offset: f.unk ? 0 : +f.offset || 0, unk: !!f.unk, pos: 'Stored', lastPos: p, hist: [] };
+    v.tires.push(t);
+    if (f['w_' + p] === 'on') setPos(v, t, p);
+  });
+  save(); render();
+}
+function copyTire(id) {
+  const t = veh().tires.find(x => x.id === id), form = $('#tireform');
+  form.set.value = t.set; form.brand.value = t.brand || ''; form.size.value = t.size || ''; form.dot.value = t.dot || '';
+  form.offset.value = 0; form.unk.checked = false; form.offset.disabled = false;
+  POS.forEach(p => form['w_' + p].value = '');
+  $('#addtitle').textContent = 'Add tire (copied from ' + (t.brand || t.set) + ') - pick the wheel';
+  window.scrollTo(0, 0);
+}
+function editOffset(id) {
+  const t = veh().tires.find(x => x.id === id);
+  const a = prompt('Miles on this tire before using the app. Leave blank if unknown:', t.unk ? '' : t.offset || 0);
+  if (a === null) return;
+  t.unk = a.trim() === ''; t.offset = t.unk ? 0 : +a || 0; save(); render();
 }
 const lastPosOf = t => t.hist.length ? t.hist[t.hist.length - 1].pos : (t.lastPos || '');
 function setLastPos(id, p) { const t = veh().tires.find(x => x.id === id); t.lastPos = p; save(); render(); }
