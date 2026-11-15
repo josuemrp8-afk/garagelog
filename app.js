@@ -2,18 +2,18 @@
 const KEY = 'garagelog.db';
 const POS = ['FL', 'FR', 'RL', 'RR'];
 const POS_NAME = { FL: 'Front Left', FR: 'Front Right', RL: 'Rear Left', RR: 'Rear Right', Stored: 'Stored', Retired: 'Retired' };
-const TABS = [['home', '🔔', 'Due'], ['log', '🔧', 'Log'], ['tires', '🛞', 'Tires'], ['miles', '📋', 'Milestones'], ['car', '🚗', 'Car']];
+const TABS = [['home', '🔔', 'Due'], ['log', '🔧', 'Log'], ['tires', '🛞', 'Tires'], ['miles', '📋', 'Service guide'], ['car', '🚗', 'Car']];
 
 // Generic, widely-used intervals. Always confirm against the owner's manual for the specific car.
 const MILESTONES = [
-  { name: 'Engine oil & filter', mi: 7500, mo: 12, note: 'Use 5,000 mi for turbo/GDI or severe use.' },
+  { name: 'Engine oil & filter', mi: 7500, mo: 12, note: 'Check the manual for the correct oil and interval.' },
   { name: 'Tire rotation', mi: 6000, mo: 6, note: 'Rotate and check pressure and tread depth.' },
   { name: 'Engine air filter', mi: 20000, mo: 24, note: '' },
   { name: 'Cabin air filter', mi: 15000, mo: 12, note: '' },
   { name: 'Brake fluid', mi: 30000, mo: 24, note: 'Hygroscopic: time-based, change at least every 2-3 years.' },
   { name: 'Brake pads/rotors inspection', mi: 15000, mo: 12, note: 'Measure pad thickness and rotor wear.' },
   { name: 'Spark plugs', mi: 60000, mo: 0, note: 'Copper ~30k, platinum/iridium 60k-100k.' },
-  { name: 'Transmission fluid', mi: 60000, mo: 0, note: 'Many OEMs say "lifetime" - 60k is a safe real-world interval. DCT/CVT: 40k-60k.' },
+  { name: 'Transmission fluid', mi: 60000, mo: 0, note: 'Check the manual for the correct fluid and interval.' },
   { name: 'Coolant', mi: 60000, mo: 60, note: 'Long-life coolants: first at 100k-120k, then every 50k-60k.' },
   { name: 'Differential / transfer case oil', mi: 60000, mo: 0, note: 'AWD/4WD and RWD cars.' },
   { name: 'Serpentine/accessory belt', mi: 90000, mo: 72, note: 'Inspect for cracks at 60k.' },
@@ -25,8 +25,32 @@ const MILESTONES = [
   { name: 'Tires replacement', mi: 50000, mo: 72, note: 'Replace at 2/32" tread or ~6-10 yrs from DOT date.' }
 ];
 
+const MIATA_2001_SOURCE = 'https://www.mazdausa.com/siteassets/global-resources/vehicle-resources/owner-manuals/2001/mx-5-miata/2001-mx-5-miata-schedule-maintenance.pdf';
+function is2001Miata(v) {
+  const i = v.info || {};
+  return String(i.year) === '2001' && /^mazda$/i.test((i.make || '').trim()) &&
+    /^(mx-?5(?: miata)?|miata)$/i.test((i.model || '').trim());
+}
+
+function miata2001Schedule(schedule) {
+  const severe = schedule !== 'normal';
+  return [
+    { name: 'Engine oil & filter', mi: schedule === 'puerto-rico' ? 3000 : severe ? 5000 : 7500,
+      mo: schedule === 'puerto-rico' ? 3 : severe ? 4 : 6,
+      note: schedule === 'puerto-rico' ? 'Mazda specifies 3,000 miles or 3 months for oil in Puerto Rico; the filter follows the Schedule 2 table.' : 'Replace engine oil and filter.' },
+    { name: 'Timing belt (+ water pump, tensioner)', mi: 60000, mo: 0, note: 'Mazda specifies replacing the timing belt every 60,000 miles. Water pump and tensioner are not specified here.' },
+    { name: 'Engine air filter', mi: 30000, mo: 24, note: severe ? 'Replace at 30,000 miles or 24 months; inspect additionally at 15,000 and 45,000 miles.' : 'Replace the air filter.' },
+    { name: 'Spark plugs', mi: 30000, mo: 24, note: 'Replace spark plugs.' },
+    { name: 'Coolant', mi: 0, mo: 0, manualOnly: true, note: 'First replacement at 45,000 miles or 36 months; then every 30,000 miles or 24 months. Check history and the manual before setting a custom reminder.' },
+    { name: 'Transmission fluid', mi: severe ? 30000 : 60000, mo: severe ? 24 : 48, note: 'Manual transmission oil only. Confirm your transmission before using this interval.' },
+    { name: 'Differential / transfer case oil', mi: severe ? 30000 : 60000, mo: severe ? 24 : 48, note: 'Rear differential oil. The manual does not specify a transfer case for this vehicle.' },
+    { name: 'Brake pads/rotors inspection', mi: severe ? 15000 : 30000, mo: severe ? 12 : 24, note: 'Inspect disc brakes; repair or replace if necessary.' }
+  ];
+}
+
 // Adapts the generic list to the decoded VIN data (powertrain, transmission, drivetrain).
 function getMilestones(v) {
+  if (is2001Miata(v)) return v.serviceSchedule ? miata2001Schedule(v.serviceSchedule) : [];
   let L = MILESTONES.map(m => ({ ...m }));
   const i = v.info || {};
   if (!i.make) return L;
@@ -76,6 +100,21 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': 
 const uid = () => Math.random().toString(36).slice(2, 10);
 const today = () => new Date().toISOString().slice(0, 10);
 const fmt = n => Number(n).toLocaleString();
+const mileageValue = n => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+const parseMileage = value => Number(value.replace(/,/g, ''));
+function formatMileage(input) {
+  const value = input.value;
+  if (!/^[\d,]*$/.test(value)) return;
+  const digitsBeforeCaret = value.slice(0, input.selectionStart).replace(/,/g, '').length;
+  const digits = value.replace(/,/g, '');
+  input.value = mileageValue(digits);
+  let caret = 0, seen = 0;
+  while (caret < input.value.length && seen < digitsBeforeCaret) {
+    if (input.value[caret] !== ',') seen++;
+    caret++;
+  }
+  input.setSelectionRange(caret, caret);
+}
 const save = () => { db.ts = Date.now(); localStorage.setItem(KEY, JSON.stringify(db)); scheduleCloud(); };
 
 // Cloud backup: private GitHub Gist, written by the user's own token (stored only on this device).
@@ -209,13 +248,15 @@ function addVehicle() {
 const views = {
   home(v) {
     const list = v.reminders.map(r => ({ r, s: status(v, r.name, r.mi, r.mo) })).sort((a, b) => a.s.sort - b.s.sort);
+    const guide = is2001Miata(v) && v.serviceSchedule ? getMilestones(v) : [];
     return `<div class="card"><div class="row"><div><h3>Odometer</h3><div class="mu">Update before each task</div></div>
-      <form class="row" onsubmit="setOdo(event)" style="width:55%"><input name="odo" type="number" inputmode="numeric" value="${v.odo}" required><button>Save</button></form></div></div>
+      <form class="row" onsubmit="setOdo(event)" style="width:55%"><input name="odo" type="text" inputmode="numeric" pattern="[0-9]+(,[0-9]{3})*" title="Enter mileage as whole numbers" oninput="formatMileage(this)" value="${mileageValue(v.odo)}" required><button>Save</button></form></div></div>
       <h2>Upcoming maintenance</h2>
       ${list.map(({ r, s }) => `<div class="card"><div class="row"><h3>${esc(r.name)}</h3><span class="tag ${s.cls}">${s.label}</span></div>
         <div class="mu">Every ${[r.mi && fmt(r.mi) + ' mi', r.mo && r.mo + ' mo'].filter(Boolean).join(' or ')}</div><div>${s.text}</div>
+        ${is2001Miata(v) && (!v.serviceSchedule || guide.some(m => m.name === r.name && !m.manualOnly && (m.mi !== r.mi || m.mo !== r.mo))) ? '<div class="mu">Review this reminder against the Mazda schedule in Service guide.</div>' : ''}
         <div class="row"><button class="sec" onclick="quickLog('${esc(r.name).replace(/'/g, '')}')">Log it now</button><button class="del" onclick="delRem('${r.id}')">Remove</button></div></div>`).join('')
-        || '<div class="card mu">No reminders yet. Open <b>Milestones</b> to add OEM-style reminders, or add your own in <b>Log</b>.</div>'}`;
+        || '<div class="card mu">No reminders yet. Open <b>Service guide</b> to add reminders, or add your own in <b>Log</b>.</div>'}`;
   },
   log(v) {
     const logs = [...v.logs].sort((a, b) => b.odo - a.odo || b.date.localeCompare(a.date));
@@ -223,7 +264,7 @@ const views = {
     return `<datalist id="types">${names.map(n => `<option value="${esc(n)}">`).join('')}</datalist>
       <div class="card"><h2>Add service record</h2><form id="logform" onsubmit="addLog(event)">
         <input name="type" list="types" placeholder="What did you do? (e.g. Engine oil & filter)" required>
-        <div class="grid"><input name="date" type="date" value="${today()}" required><input name="odo" type="number" inputmode="numeric" placeholder="Mileage" value="${v.odo || ''}" required></div>
+        <div class="grid"><input name="date" type="date" value="${today()}" required><input name="odo" type="text" inputmode="numeric" pattern="[0-9]+(,[0-9]{3})*" title="Enter mileage as whole numbers" oninput="formatMileage(this)" placeholder="Mileage" value="${v.odo ? mileageValue(v.odo) : ''}" required></div>
         <div class="grid"><input name="cost" type="number" step="0.01" inputmode="decimal" placeholder="Cost (optional)"><input name="parts" placeholder="Parts / brand"></div>
         <textarea name="notes" rows="2" placeholder="Notes"></textarea>
         <details><summary class="mu">Set repeat reminder</summary>
@@ -238,7 +279,7 @@ const views = {
     const mounted = POS.map(p => ({ p, t: v.tires.find(t => t.pos === p) }));
     const optsOf = t => ['Stored', ...POS, 'Retired'].map(p => `<option value="${p}" ${t.pos === p ? 'selected' : ''}>${POS_NAME[p]}</option>`).join('');
     return `<h2>On the car now</h2><div class="card"><div class="grid">${mounted.map(({ p, t }) =>
-      `<div><span class="mu">${POS_NAME[p]}</span><br>${t ? `<b>${esc(t.set)}</b> · ${fmt(tireMiles(v, t))}${t.unk ? '+' : ''} mi` : '—'}</div>`).join('')}</div></div>
+      `<div><span class="mu">${POS_NAME[p]}</span><br>${t ? `<b>${esc(t.set)}</b><br>${t.brand ? esc(t.brand) : '<span class="mu">Brand not entered</span>'}${t.size ? `<br><span class="mu">${esc(t.size)}</span>` : ''}<br>${fmt(tireMiles(v, t))}${t.unk ? '+' : ''} mi` : '—'}</div>`).join('')}</div></div>
       <div class="card"><h3 id="addtitle">Add tires</h3><form id="tireform" onsubmit="addTires(event)">
         <div class="grid"><input name="set" list="sets" placeholder="Set name (Winter, Summer...)" required><input name="brand" placeholder="Brand / model"></div>
         <datalist id="sets">${sets.map(s => `<option value="${esc(s)}">`).join('')}</datalist>
@@ -263,23 +304,28 @@ const views = {
     const i = v.info || {};
     const items = ML.map(m => {
       const last = lastLog(v, m.name);
-      const next = m.mi ? (last ? last.odo + m.mi : Math.ceil((v.odo + 1) / m.mi) * m.mi) : null;
-      const has = v.reminders.some(r => r.name.toLowerCase() === m.name.toLowerCase());
-      return { m, last, next, has };
+      const next = m.mi && last ? last.odo + m.mi : null;
+      const reminder = v.reminders.find(r => r.name.toLowerCase() === m.name.toLowerCase());
+      return { m, last, next, reminder };
     }).sort((a, b) => (a.next ?? 1e9) - (b.next ?? 1e9));
     const profile = [i.year, i.make, i.model, i.engine, i.trans, i.drive].filter(Boolean).join(' · ');
     const rc = v.recalls;
-    return `<h2>Recommended maintenance</h2><div class="mu" style="margin-bottom:8px">${profile ? `Tailored for: ${esc(profile)}.` : 'Generic intervals - load your VIN in the Car tab to tailor this list.'} Always confirm against the owner's manual.</div>
-      ${v.vin ? `<div class="card"><div class="row"><h3>Recalls</h3><button class="sec" onclick="loadRecalls()">Refresh</button></div>${rc == null ? '<div class="mu">Not checked yet.</div>' : rc.length ? rc.map(r => `<div style="margin-top:6px"><b>${esc(r.Component)}</b> <span class="mu">${esc(r.NHTSACampaignNumber)}</span><div class="mu">${esc(r.Summary).slice(0, 220)}…</div></div>`).join('') : '<div class="mu">No open recalls found for this model/year.</div>'}</div>` : ''}
-      ${items.map(({ m, last, next, has }) => `<div class="card"><div class="row"><h3>${esc(m.name)}</h3>${next != null ? `<span class="tag ${next - v.odo < 0 ? 'over' : next - v.odo < 3000 ? 'soon' : 'ok'}">${fmt(next)} mi</span>` : ''}</div>
-        <div class="mu">Every ${[m.mi && fmt(m.mi) + ' mi', m.mo && m.mo + ' mo'].filter(Boolean).join(' or ')}${last ? ' · last done at ' + fmt(last.odo) + ' mi' : ' · no record'}</div>
+    const verified = is2001Miata(v);
+    return `<h2>Service guide: ${esc(v.name)}</h2><div class="mu" style="margin-bottom:8px">${profile ? `Selected vehicle: ${esc(profile)}. ` : 'Load a VIN in the Car tab to include vehicle information. '}${verified ? 'Based on Mazda’s 2001 US-market MX-5 maintenance schedule. Confirm it applies to your vehicle and market.' : 'No verified OEM schedule is available for this vehicle. The items below are general estimates, not manufacturer recommendations. Check the owner’s manual before relying on them.'}</div>
+      ${verified ? `<div class="card"><h3>Mazda maintenance schedule</h3><div class="mu">Select the schedule for this car. Mazda says use Schedule 2 if any of these apply: repeated short trips, dust, extended brake use, salt, rough or muddy roads, extended idling or low speeds, prolonged cold or extreme humidity. Puerto Rico residents follow Schedule 2.</div>
+        <label>Driving conditions and market<select onchange="setServiceSchedule(this.value)"><option value="">Choose a schedule</option><option value="normal" ${v.serviceSchedule === 'normal' ? 'selected' : ''}>Schedule 1: normal</option><option value="severe" ${v.serviceSchedule === 'severe' ? 'selected' : ''}>Schedule 2: severe (except Puerto Rico)</option><option value="puerto-rico" ${v.serviceSchedule === 'puerto-rico' ? 'selected' : ''}>Schedule 2: Puerto Rico</option></select></label>
+        <div class="mu">The guide covers selected items, not the complete schedule. <a href="${MIATA_2001_SOURCE}" target="_blank" rel="noopener noreferrer">Read Mazda’s complete schedule (PDF, pages 8-3–8-8)</a>.</div></div>` : ''}
+      ${v.vin ? `<div class="card"><div class="row"><h3>Recalls</h3><button class="sec" onclick="loadRecalls()">Refresh</button></div>${rc == null ? '<div class="mu">Not checked yet.</div>' : rc.length ? rc.map(r => `<div style="margin-top:6px"><b>${esc(r.Component)}</b> <span class="mu">${esc(r.NHTSACampaignNumber)}</span><div class="mu">${esc(r.Summary).slice(0, 220)}…</div></div>`).join('') : '<div class="mu">No recalls found for this model/year. Check your VIN with NHTSA or your dealer for open recalls.</div>'}</div>` : ''}
+      ${verified && !v.serviceSchedule ? '<div class="card">Choose a schedule above to see Mazda’s intervals. Existing reminders are unchanged; review them after choosing.</div>' : ''}
+      ${items.map(({ m, last, next, reminder }) => `<div class="card"><div class="row"><h3>${esc(m.name)}</h3>${next != null ? `<span class="tag ${next - v.odo < 0 ? 'over' : next - v.odo < 3000 ? 'soon' : 'ok'}">${fmt(next)} mi</span>` : !last ? '<span class="tag none">No history</span>' : ''}</div>
+        <div class="mu">${m.manualOnly ? 'See schedule details below' : 'Every ' + [m.mi && fmt(m.mi) + ' mi', m.mo && m.mo + ' mo'].filter(Boolean).join(' or ')}${last ? ' · last done at ' + fmt(last.odo) + ' mi' : ' · no record'}</div>
         ${m.note ? `<div>${esc(m.note)}</div>` : ''}
-        ${has ? '<div class="mu">✔ Reminder active</div>' : `<button class="sec" onclick="        addMile('${ML.indexOf(m)}')">Add reminder</button>`}
+        ${reminder ? `<div class="mu">Reminder active: every ${[reminder.mi && fmt(reminder.mi) + ' mi', reminder.mo && reminder.mo + ' mo'].filter(Boolean).join(' or ')}</div>${!m.manualOnly && (reminder.mi !== m.mi || reminder.mo !== m.mo) ? `<button class="sec" onclick="updateMile(${ML.indexOf(m)})">Update reminder to this interval</button>` : ''}` : m.manualOnly ? '<div class="mu">Set a custom reminder from the Log tab after checking the manual.</div>' : `<button class="sec" onclick="addMile(${ML.indexOf(m)})">Add reminder</button>`}
         <details><summary style="color:var(--ac);padding:6px 0">+ Add to history (past or present)</summary>
                   <form onsubmit="addPast(event,${ML.indexOf(m)})">
-            <div class="grid"><input name="date" type="date" max="${today()}" required><input name="odo" type="number" inputmode="numeric" placeholder="Mileage" required></div>
+            <div class="grid"><input name="date" type="date" max="${today()}" required><input name="odo" type="text" inputmode="numeric" pattern="[0-9]+(,[0-9]{3})*" title="Enter mileage as whole numbers" oninput="formatMileage(this)" placeholder="Mileage" required></div>
             <input name="notes" placeholder="Notes / parts (optional)">
-            <label class="mu"><input type="checkbox" name="rem" ${has ? '' : 'checked'} style="width:auto"> Keep reminder active</label><br>
+            ${!m.manualOnly ? `<label class="mu"><input type="checkbox" name="rem" ${reminder ? '' : 'checked'} style="width:auto"> Keep reminder active</label><br>` : ''}
             <button>Save to history</button></form></details>
         ${last ? `<div class="mu">${v.logs.filter(l => l.type.toLowerCase() === m.name.toLowerCase()).length} record(s) logged</div>` : ''}</div>`).join('')}`;
   },
@@ -304,24 +350,43 @@ function backupCards() {
         <input id="imp" type="file" accept="application/json" hidden onchange="importData(event)"></div>`;
 }
 
-function setOdo(e) { e.preventDefault(); veh().odo = +new FormData(e.target).get('odo'); save(); render(); }
+function setOdo(e) { e.preventDefault(); veh().odo = parseMileage(new FormData(e.target).get('odo')); save(); render(); }
 function quickLog(name) { db.tab = 'log'; save(); render(); document.querySelector('[name=type]').value = name; document.querySelector('[name=notes]').focus(); }
 function delRem(id) { const v = veh(); v.reminders = v.reminders.filter(r => r.id !== id); save(); render(); }
-function addMile(i) { const m = getMilestones(veh())[i]; veh().reminders.push({ id: uid(), name: m.name, mi: m.mi, mo: m.mo }); save(); render(); }
+function setServiceSchedule(schedule) {
+  if (!['', 'normal', 'severe', 'puerto-rico'].includes(schedule)) return toast('Invalid service schedule.');
+  veh().serviceSchedule = schedule;
+  save(); render();
+}
+function addMile(i) {
+  const v = veh(), m = getMilestones(v)[i];
+  if (!m || m.manualOnly) return toast('This interval needs to be set manually after checking the schedule.');
+  if (v.reminders.some(r => r.name.toLowerCase() === m.name.toLowerCase())) return toast('This reminder already exists.');
+  v.reminders.push({ id: uid(), name: m.name, mi: m.mi, mo: m.mo }); save(); render();
+}
+function updateMile(i) {
+  const v = veh(), m = getMilestones(v)[i];
+  if (!m || m.manualOnly) return toast('This interval needs to be set manually after checking the schedule.');
+  const r = v.reminders.find(r => r.name.toLowerCase() === m.name.toLowerCase());
+  if (!r) return toast('Reminder not found.');
+  if (!confirm(`Update ${m.name} to ${[m.mi && fmt(m.mi) + ' miles', m.mo && m.mo + ' months'].filter(Boolean).join(' or ')}?`)) return;
+  r.mi = m.mi; r.mo = m.mo; save(); render();
+}
 
 function addPast(e, i) {
   e.preventDefault();
   const f = Object.fromEntries(new FormData(e.target)), v = veh(), m = getMilestones(veh())[i];
-  v.logs.push({ id: uid(), type: m.name, date: f.date, odo: +f.odo, cost: '', parts: '', notes: f.notes });
-  if (+f.odo > v.odo) v.odo = +f.odo;
-  if (f.rem && !v.reminders.some(r => r.name.toLowerCase() === m.name.toLowerCase())) v.reminders.push({ id: uid(), name: m.name, mi: m.mi, mo: m.mo });
+  const odo = parseMileage(f.odo);
+  v.logs.push({ id: uid(), type: m.name, date: f.date, odo, cost: '', parts: '', notes: f.notes });
+  if (odo > v.odo) v.odo = odo;
+  if (f.rem && !m.manualOnly && !v.reminders.some(r => r.name.toLowerCase() === m.name.toLowerCase())) v.reminders.push({ id: uid(), name: m.name, mi: m.mi, mo: m.mo });
   save(); render();
 }
 
 function addLog(e) {
   e.preventDefault();
   const f = Object.fromEntries(new FormData(e.target)), v = veh();
-  const l = { id: uid(), type: f.type.trim(), date: f.date, odo: +f.odo, cost: f.cost, parts: f.parts, notes: f.notes };
+  const l = { id: uid(), type: f.type.trim(), date: f.date, odo: parseMileage(f.odo), cost: f.cost, parts: f.parts, notes: f.notes };
   v.logs.push(l);
   if (l.odo > v.odo) v.odo = l.odo;
   if (f.rmi || f.rmo) {
@@ -390,32 +455,47 @@ function movTire(id, pos) {
 }
 function delTire(id) { if (confirm('Delete this tire and its history?')) { const v = veh(); v.tires = v.tires.filter(t => t.id !== id); save(); render(); } }
 
+const vinRequests = new Map();
 async function decodeVin(e) {
   e.preventDefault();
   const v = veh(), vin = new FormData(e.target).get('vin').trim().toUpperCase();
   if (!/^[A-HJ-NPR-Z0-9]{17}$/.test(vin)) return toast('VIN must be 17 characters (no I, O or Q).');
+  const request = Symbol();
+  vinRequests.set(v.id, request);
   try {
     const r = await fetch(`https://vpic.nhtsa.dot.gov/api/vehicles/DecodeVinValues/${vin}?format=json`);
+    if (!r.ok) throw new Error('VIN service returned ' + r.status);
     const d = (await r.json()).Results[0];
-    const eng = [d.DisplacementL && (+d.DisplacementL).toFixed(1) + 'L', d.EngineCylinders && d.EngineCylinders + 'cyl', d.EngineHP && d.EngineHP + 'hp', d.Turbo && /turbo/i.test(d.Turbo) ? 'Turbo' : ''].filter(Boolean).join(' ');
+    if (vinRequests.get(v.id) !== request || !db.vehicles.includes(v)) return;
+    if (!d || !d.Make) return toast('VIN not recognized: ' + (d?.ErrorText || 'No vehicle information returned.'));
+    const turbo = /^(yes|turbo|turbocharged)$/i.test((d.Turbo || '').trim());
+    const eng = [d.DisplacementL && (+d.DisplacementL).toFixed(1) + 'L', d.EngineCylinders && d.EngineCylinders + 'cyl', d.EngineHP && d.EngineHP + 'hp', turbo ? 'Turbo' : ''].filter(Boolean).join(' ');
     v.vin = vin;
-    v.info = { year: d.ModelYear, make: d.Make, model: d.Model, trim: d.Trim, engine: eng, fuel: d.FuelTypePrimary, drive: d.DriveType, trans: d.TransmissionStyle, body: d.BodyClass,     plant: [d.PlantCity, d.PlantCountry].filter(Boolean).join(', '),
-          elec: d.ElectrificationLevel, turbo: !!d.Turbo && /turbo/i.test(d.Turbo), gdi: /direct/i.test(d.FuelInjectionType || ''), cyl: d.EngineCylinders };
-        v.recalls = null;
-        if (d.ErrorCode && d.ErrorCode !== '0' && !d.Make) toast('VIN not recognized: ' + d.ErrorText);
-        save(); render();
-        loadRecalls();
-      } catch { toast('Could not reach the VIN service. Check your connection.'); }
-    }
-    async function loadRecalls() {
-      const v = veh(), i = v.info || {};
-      if (!i.make) return;
-      try {
-        const u = `https://api.nhtsa.gov/recalls/recallsByVehicle?make=${encodeURIComponent(i.make)}&model=${encodeURIComponent(i.model)}&modelYear=${encodeURIComponent(i.year)}`;
-        v.recalls = ((await (await fetch(u)).json()).results || []).slice(0, 15);
-        save(); render();
-      } catch { toast('Could not load recalls.'); }
-    }
+    v.info = { year: d.ModelYear, make: d.Make, model: d.Model, trim: d.Trim, engine: eng, fuel: d.FuelTypePrimary, drive: d.DriveType, trans: d.TransmissionStyle, body: d.BodyClass, plant: [d.PlantCity, d.PlantCountry].filter(Boolean).join(', '),
+      elec: d.ElectrificationLevel, turbo, gdi: /direct/i.test(d.FuelInjectionType || ''), cyl: d.EngineCylinders };
+    v.recalls = null;
+    save(); render();
+    loadRecalls(v);
+  } catch (error) {
+    if (vinRequests.get(v.id) === request && db.vehicles.includes(v)) toast('Could not load VIN information: ' + error.message);
+  }
+}
+async function loadRecalls(v = veh()) {
+  const i = v.info || {}, vin = v.vin;
+  if (!i.make || !i.model || !i.year) return toast('Year, make and model are needed to check recalls. Reload the VIN information.');
+  try {
+    const u = `https://api.nhtsa.gov/recalls/recallsByVehicle?make=${encodeURIComponent(i.make)}&model=${encodeURIComponent(i.model)}&modelYear=${encodeURIComponent(i.year)}`;
+    const response = await fetch(u);
+    if (!response.ok) throw new Error('Recall service returned ' + response.status);
+    const data = await response.json();
+    if (!Array.isArray(data.results)) throw new Error('Unexpected recall service response');
+    if (!db.vehicles.includes(v) || v.vin !== vin) return;
+    v.recalls = data.results.slice(0, 15);
+    save(); render();
+  } catch (error) {
+    toast('Could not load recalls: ' + error.message);
+  }
+}
 function renameCar() { const n = prompt('New name:', veh().name); if (n) { veh().name = n; save(); render(); } }
 function delCar() { if (confirm('Delete this car and ALL its data?')) { db.vehicles = db.vehicles.filter(v => v.id !== db.sel); db.sel = db.vehicles[0]?.id || null; save(); render(); } }
 
