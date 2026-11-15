@@ -26,10 +26,58 @@ const MILESTONES = [
 ];
 
 const MIATA_2001_SOURCE = 'https://www.mazdausa.com/siteassets/global-resources/vehicle-resources/owner-manuals/2001/mx-5-miata/2001-mx-5-miata-schedule-maintenance.pdf';
+const SONIC_2013_SOURCE = 'https://contentdelivery.ext.gm.com/content/dam/cope/en_us/public/pdf_assets/active/owners_manuals_browse/2013/2k13sonic-6653096060511717437.pdf';
+const GTI_2023_SOURCE = 'https://ownersliterature.vw.com/owners-literature-service/v1/document/7f3ce02f-ee20-4e97-8747-fb18f14b9b66';
+const kmToMiles = km => Math.floor(km / 1.609344);
 function is2001Miata(v) {
   const i = v.info || {};
   return String(i.year) === '2001' && /^mazda$/i.test((i.make || '').trim()) &&
     /^(mx-?5(?: miata)?|miata)$/i.test((i.model || '').trim());
+}
+
+function is2013Sonic(v) {
+  const i = v.info || {};
+  return String(i.year) === '2013' && /^chevrolet$/i.test((i.make || '').trim()) &&
+    /^sonic$/i.test((i.model || '').trim()) && /^1\.8\s*l\b/i.test((i.engine || '').trim()) &&
+    /automatic/i.test(i.trans || '');
+}
+
+function canConfirm2023Gti(v) {
+  const i = v.info || {};
+  return String(i.year) === '2023' && /^volkswagen$/i.test((i.make || '').trim()) &&
+    (!(i.model || '').trim() || /^(golf )?gti$/i.test(i.model.trim())) &&
+    (!(i.engine || '').trim() || /^2\.0\s*l\b/i.test(i.engine.trim())) &&
+    (!(i.trans || '').trim() || /dsg|dual|automatic/i.test(i.trans));
+}
+
+function sonic2013Schedule(schedule, market) {
+  const severe = schedule === 'severe';
+  const interval = (miles, km) => market === 'us' ? miles : kmToMiles(km);
+  return [
+    { name: 'Engine oil & filter', mi: 0, mo: 0, manualOnly: true, note: 'Follow the oil-life system and change the oil and filter within 600 miles (1,000 km) of the Code 82 message, at least once per year. Reset the system after service.' },
+    { name: 'Tire rotation', mi: interval(7500, 12000), mo: 0, note: 'Rotate if recommended for the vehicle.' },
+    { name: 'Cabin air filter', mi: interval(22500, 36000), mo: 24, note: 'Replace sooner if conditions require.' },
+    { name: 'Engine air filter', mi: interval(45000, 72000), mo: 48, note: 'Replace the engine air filter.' },
+    { name: 'Spark plugs', mi: interval(97500, 156000), mo: 0, note: 'For the 1.8L engine; inspect spark plug wires.' },
+    { name: 'Transmission fluid', mi: interval(severe ? 45000 : 97500, severe ? 72000 : 156000), mo: 0, note: 'Automatic transmission: change the filter if serviceable.' },
+    { name: 'Timing belt (+ water pump, tensioner)', mi: interval(97500, 156000), mo: 120, note: '1.8L timing belt. The table does not specify replacing the water pump or tensioner.' },
+    { name: 'Coolant', mi: interval(150000, 240000), mo: 60, note: 'Drain, flush and fill. Check the manual for subsequent service.' },
+    { name: 'Brake fluid', mi: interval(150000, 240000), mo: 120, note: 'Replace brake/clutch fluid.' },
+    { name: 'Serpentine/accessory belt', mi: interval(150000, 240000), mo: 120, note: 'Inspect the accessory drive belt; replace if needed.' }
+  ];
+}
+
+function gti2023Schedule() {
+  return [
+    { name: 'Engine oil & filter', mi: kmToMiles(15000), mo: 12, note: 'Canadian schedule: every 15,000 km (approximately 9,320 mi) or 1 year. VW calls for shorter intervals in some severe conditions.' },
+    { name: 'Brake pads/rotors inspection', mi: kmToMiles(15000), mo: 12, note: 'Check front and rear pad thickness and rotor condition at the oil service.' },
+    { name: 'Engine air filter', mi: kmToMiles(90000), mo: 72, note: 'Every 90,000 km (approximately 55,923 mi) or 6 years.' },
+    { name: 'Cabin air filter', mi: kmToMiles(60000), mo: 24, note: 'Every 60,000 km (approximately 37,282 mi) or 2 years.' },
+    { name: 'Spark plugs', mi: kmToMiles(120000), mo: 72, note: 'GTI: every 120,000 km (approximately 74,564 mi) or 6 years.' },
+    { name: 'Transmission fluid', mi: kmToMiles(120000), mo: 0, note: '0GC seven-speed DSG: every 120,000 km (approximately 74,564 mi). Verify transmission code and service procedure.' },
+    { name: 'Brake fluid', mi: 0, mo: 24, note: 'Canada: first change 2 years after registration, then every 2 years. An active reminder requires a service record.' },
+    { name: 'Front axle differential lock fluid', mi: 0, mo: 0, manualOnly: true, note: 'Every 3 years where applicable. Confirm the vehicle is equipped with this lock before setting a custom reminder.' }
+  ];
 }
 
 function miata2001Schedule(schedule) {
@@ -50,7 +98,9 @@ function miata2001Schedule(schedule) {
 
 // Adapts the generic list to the decoded VIN data (powertrain, transmission, drivetrain).
 function getMilestones(v) {
-  if (is2001Miata(v)) return v.serviceSchedule ? miata2001Schedule(v.serviceSchedule) : [];
+  if (is2001Miata(v)) return v.miataUSMarket && v.serviceSchedule ? miata2001Schedule(v.serviceSchedule) : [];
+  if (is2013Sonic(v)) return ['us', 'canada'].includes(v.sonicMarket) && ['normal', 'severe'].includes(v.sonicSchedule) ? sonic2013Schedule(v.sonicSchedule, v.sonicMarket) : [];
+  if (canConfirm2023Gti(v)) return v.confirm2023Gti ? gti2023Schedule() : [];
   let L = MILESTONES.map(m => ({ ...m }));
   const i = v.info || {};
   if (!i.make) return L;
@@ -248,13 +298,14 @@ function addVehicle() {
 const views = {
   home(v) {
     const list = v.reminders.map(r => ({ r, s: status(v, r.name, r.mi, r.mo) })).sort((a, b) => a.s.sort - b.s.sort);
-    const guide = is2001Miata(v) && v.serviceSchedule ? getMilestones(v) : [];
+    const hasGuide = is2001Miata(v) || is2013Sonic(v) || canConfirm2023Gti(v);
+    const guide = hasGuide ? getMilestones(v) : [];
     return `<div class="card"><div class="row"><div><h3>Odometer</h3><div class="mu">Update before each task</div></div>
       <form class="row" onsubmit="setOdo(event)" style="width:55%"><input name="odo" type="text" inputmode="numeric" pattern="[0-9]+(,[0-9]{3})*" title="Enter mileage as whole numbers" oninput="formatMileage(this)" value="${mileageValue(v.odo)}" required><button>Save</button></form></div></div>
       <h2>Upcoming maintenance</h2>
       ${list.map(({ r, s }) => `<div class="card"><div class="row"><h3>${esc(r.name)}</h3><span class="tag ${s.cls}">${s.label}</span></div>
         <div class="mu">Every ${[r.mi && fmt(r.mi) + ' mi', r.mo && r.mo + ' mo'].filter(Boolean).join(' or ')}</div><div>${s.text}</div>
-        ${is2001Miata(v) && (!v.serviceSchedule || guide.some(m => m.name === r.name && !m.manualOnly && (m.mi !== r.mi || m.mo !== r.mo))) ? '<div class="mu">Review this reminder against the Mazda schedule in Service guide.</div>' : ''}
+        ${hasGuide && !guide.some(m => m.name.toLowerCase() === r.name.toLowerCase() && !m.manualOnly && m.mi === r.mi && m.mo === r.mo) ? '<div class="mu">Review this reminder against the manufacturer schedule in Service guide; it may differ or not be covered.</div>' : ''}
         <div class="row"><button class="sec" onclick="quickLog('${esc(r.name).replace(/'/g, '')}')">Log it now</button><button class="del" onclick="delRem('${r.id}')">Remove</button></div></div>`).join('')
         || '<div class="card mu">No reminders yet. Open <b>Service guide</b> to add reminders, or add your own in <b>Log</b>.</div>'}`;
   },
@@ -310,13 +361,17 @@ const views = {
     }).sort((a, b) => (a.next ?? 1e9) - (b.next ?? 1e9));
     const profile = [i.year, i.make, i.model, i.engine, i.trans, i.drive].filter(Boolean).join(' · ');
     const rc = v.recalls;
-    const verified = is2001Miata(v);
-    return `<h2>Service guide: ${esc(v.name)}</h2><div class="mu" style="margin-bottom:8px">${profile ? `Selected vehicle: ${esc(profile)}. ` : 'Load a VIN in the Car tab to include vehicle information. '}${verified ? 'Based on Mazda’s 2001 US-market MX-5 maintenance schedule. Confirm it applies to your vehicle and market.' : 'No verified OEM schedule is available for this vehicle. The items below are general estimates, not manufacturer recommendations. Check the owner’s manual before relying on them.'}</div>
-      ${verified ? `<div class="card"><h3>Mazda maintenance schedule</h3><div class="mu">Select the schedule for this car. Mazda says use Schedule 2 if any of these apply: repeated short trips, dust, extended brake use, salt, rough or muddy roads, extended idling or low speeds, prolonged cold or extreme humidity. Puerto Rico residents follow Schedule 2.</div>
+    const miata = is2001Miata(v), sonic = is2013Sonic(v), gti = canConfirm2023Gti(v) && v.confirm2023Gti;
+    return `<h2>Service guide: ${esc(v.name)}</h2><div class="mu" style="margin-bottom:8px">${profile ? `Selected vehicle: ${esc(profile)}. ` : 'Load a VIN in the Car tab to include vehicle information. '}${miata ? 'Mazda’s source is a US-market schedule; it is not verified for Canadian-market vehicles.' : sonic ? 'Selected items from Chevrolet’s 2013 Sonic owner’s manual, for the 1.8L automatic.' : gti ? 'Selected items from Volkswagen’s 2023 Canadian GTI 2.0L DSG schedule, based on your confirmation.' : 'No verified OEM schedule is available for this vehicle. The items below are general estimates, not manufacturer recommendations. Check the owner’s manual before relying on them.'}</div>
+      ${miata ? `<div class="card"><h3>Mazda maintenance schedule</h3><label><input type="checkbox" style="width:auto" onchange="setMiataMarket(this.checked)" ${v.miataUSMarket ? 'checked' : ''}> I have confirmed this is a US-market 2001 MX-5 and this schedule applies.</label><div class="mu">Do not select this for a Canadian-market car without checking with Mazda. Mazda says use Schedule 2 if any of these apply: repeated short trips, dust, extended brake use, salt, rough or muddy roads, extended idling or low speeds, prolonged cold or extreme humidity. Puerto Rico residents follow Schedule 2.</div>
+        ${v.miataUSMarket ? `
         <label>Driving conditions and market<select onchange="setServiceSchedule(this.value)"><option value="">Choose a schedule</option><option value="normal" ${v.serviceSchedule === 'normal' ? 'selected' : ''}>Schedule 1: normal</option><option value="severe" ${v.serviceSchedule === 'severe' ? 'selected' : ''}>Schedule 2: severe (except Puerto Rico)</option><option value="puerto-rico" ${v.serviceSchedule === 'puerto-rico' ? 'selected' : ''}>Schedule 2: Puerto Rico</option></select></label>
-        <div class="mu">The guide covers selected items, not the complete schedule. <a href="${MIATA_2001_SOURCE}" target="_blank" rel="noopener noreferrer">Read Mazda’s complete schedule (PDF, pages 8-3–8-8)</a>.</div></div>` : ''}
-      ${v.vin ? `<div class="card"><div class="row"><h3>Recalls</h3><button class="sec" onclick="loadRecalls()">Refresh</button></div>${rc == null ? '<div class="mu">Not checked yet.</div>' : rc.length ? rc.map(r => `<div style="margin-top:6px"><b>${esc(r.Component)}</b> <span class="mu">${esc(r.NHTSACampaignNumber)}</span><div class="mu">${esc(r.Summary).slice(0, 220)}…</div></div>`).join('') : '<div class="mu">No recalls found for this model/year. Check your VIN with NHTSA or your dealer for open recalls.</div>'}</div>` : ''}
-      ${verified && !v.serviceSchedule ? '<div class="card">Choose a schedule above to see Mazda’s intervals. Existing reminders are unchanged; review them after choosing.</div>' : ''}
+        ` : ''}<div class="mu">The guide covers selected items, not the complete schedule. <a href="${MIATA_2001_SOURCE}" target="_blank" rel="noopener noreferrer">Read Mazda’s US schedule (PDF, pages 8-3–8-8)</a>.</div></div>` : ''}
+      ${sonic ? `<div class="card"><h3>Chevrolet maintenance schedule</h3><div class="mu">Severe includes heavy city traffic in hot weather, hilly terrain, frequent towing, high-speed or competitive driving, or taxi, police or delivery service. The oil-life system applies under both schedules.</div><label>Vehicle market<select onchange="setSonicMarket(this.value)"><option value="">Choose a market</option><option value="us" ${v.sonicMarket === 'us' ? 'selected' : ''}>United States</option><option value="canada" ${v.sonicMarket === 'canada' ? 'selected' : ''}>Canada</option></select></label><label>Driving conditions<select onchange="setSonicSchedule(this.value)"><option value="">Choose a schedule</option><option value="normal" ${v.sonicSchedule === 'normal' ? 'selected' : ''}>Normal</option><option value="severe" ${v.sonicSchedule === 'severe' ? 'selected' : ''}>Severe</option></select></label><div class="mu">Selected items only. U.S. reminders use the manual’s mileage column; Canadian kilometre limits are converted down to whole miles. <a href="${SONIC_2013_SOURCE}" target="_blank" rel="noopener noreferrer">Read the Chevrolet owner’s manual (pages 11-2–11-8)</a>.</div></div>` : ''}
+      ${canConfirm2023Gti(v) && !v.confirm2023Gti ? '<div class="card"><h3>Confirm vehicle details</h3><div class="mu">The decoded model or transmission may be missing. Only confirm if this is a Canadian-market 2023 Golf GTI 2.0L with 7-speed 0GC DSG.</div><button class="sec" onclick="confirmGti()">Confirm Canadian 2023 GTI DSG</button></div>' : ''}
+      ${gti ? `<div class="card"><h3>Volkswagen maintenance schedule</h3><div class="mu">Canadian 2023 GTI 2.0L, 7-speed 0GC DSG, normal conditions; severe use may require shorter intervals. Metric limits are converted down to whole miles. This is a selection of items, not the complete schedule. <a href="${GTI_2023_SOURCE}" target="_blank" rel="noopener noreferrer">Read Volkswagen’s 2023 maintenance schedule (PDF)</a>.</div><button class="sec" onclick="clearGti()">Remove vehicle confirmation</button></div>` : ''}
+      ${v.vin ? `<div class="card"><div class="row"><h3>US NHTSA model/year recalls</h3><button class="sec" onclick="loadRecalls()">Refresh</button></div><div class="mu">This US model/year list does not determine whether your individual vehicle has an open recall. For Canadian vehicles, check with your manufacturer or Transport Canada.</div>${rc == null ? '<div class="mu">Not checked yet.</div>' : rc.length ? rc.map(r => `<div style="margin-top:6px"><b>${esc(r.Component)}</b> <span class="mu">${esc(r.NHTSACampaignNumber)}</span><div class="mu">${esc(r.Summary).slice(0, 220)}…</div></div>`).join('') : '<div class="mu">No US recalls found for this model/year.</div>'}</div>` : ''}
+      ${(miata && (!v.miataUSMarket || !v.serviceSchedule)) || (sonic && (!v.sonicMarket || !v.sonicSchedule)) ? '<div class="card">Confirm the applicable market and choose a schedule above to see the intervals. Existing reminders are unchanged; review them after choosing.</div>' : ''}
       ${items.map(({ m, last, next, reminder }) => `<div class="card"><div class="row"><h3>${esc(m.name)}</h3>${next != null ? `<span class="tag ${next - v.odo < 0 ? 'over' : next - v.odo < 3000 ? 'soon' : 'ok'}">${fmt(next)} mi</span>` : !last ? '<span class="tag none">No history</span>' : ''}</div>
         <div class="mu">${m.manualOnly ? 'See schedule details below' : 'Every ' + [m.mi && fmt(m.mi) + ' mi', m.mo && m.mo + ' mo'].filter(Boolean).join(' or ')}${last ? ' · last done at ' + fmt(last.odo) + ' mi' : ' · no record'}</div>
         ${m.note ? `<div>${esc(m.note)}</div>` : ''}
@@ -354,10 +409,31 @@ function setOdo(e) { e.preventDefault(); veh().odo = parseMileage(new FormData(e
 function quickLog(name) { db.tab = 'log'; save(); render(); document.querySelector('[name=type]').value = name; document.querySelector('[name=notes]').focus(); }
 function delRem(id) { const v = veh(); v.reminders = v.reminders.filter(r => r.id !== id); save(); render(); }
 function setServiceSchedule(schedule) {
-  if (!['', 'normal', 'severe', 'puerto-rico'].includes(schedule)) return toast('Invalid service schedule.');
+  if (!is2001Miata(veh()) || !veh().miataUSMarket || !['', 'normal', 'severe', 'puerto-rico'].includes(schedule)) return toast('Invalid service schedule.');
   veh().serviceSchedule = schedule;
   save(); render();
 }
+function setMiataMarket(confirmed) {
+  if (!is2001Miata(veh())) return toast('This Mazda schedule does not match the selected vehicle.');
+  veh().miataUSMarket = confirmed;
+  save(); render();
+}
+function setSonicSchedule(schedule) {
+  if (!is2013Sonic(veh()) || !['', 'normal', 'severe'].includes(schedule)) return toast('Invalid service schedule.');
+  veh().sonicSchedule = schedule;
+  save(); render();
+}
+function setSonicMarket(market) {
+  if (!is2013Sonic(veh()) || !['', 'us', 'canada'].includes(market)) return toast('Invalid vehicle market.');
+  veh().sonicMarket = market;
+  save(); render();
+}
+function confirmGti() {
+  if (!canConfirm2023Gti(veh())) return toast('This Volkswagen schedule does not match the selected vehicle.');
+  veh().confirm2023Gti = true;
+  save(); render();
+}
+function clearGti() { veh().confirm2023Gti = false; save(); render(); }
 function addMile(i) {
   const v = veh(), m = getMilestones(v)[i];
   if (!m || m.manualOnly) return toast('This interval needs to be set manually after checking the schedule.');
@@ -470,6 +546,13 @@ async function decodeVin(e) {
     if (!d || !d.Make) return toast('VIN not recognized: ' + (d?.ErrorText || 'No vehicle information returned.'));
     const turbo = /^(yes|turbo|turbocharged)$/i.test((d.Turbo || '').trim());
     const eng = [d.DisplacementL && (+d.DisplacementL).toFixed(1) + 'L', d.EngineCylinders && d.EngineCylinders + 'cyl', d.EngineHP && d.EngineHP + 'hp', turbo ? 'Turbo' : ''].filter(Boolean).join(' ');
+    if (v.vin !== vin) {
+      delete v.miataUSMarket;
+      delete v.serviceSchedule;
+      delete v.sonicSchedule;
+      delete v.sonicMarket;
+      delete v.confirm2023Gti;
+    }
     v.vin = vin;
     v.info = { year: d.ModelYear, make: d.Make, model: d.Model, trim: d.Trim, engine: eng, fuel: d.FuelTypePrimary, drive: d.DriveType, trans: d.TransmissionStyle, body: d.BodyClass, plant: [d.PlantCity, d.PlantCountry].filter(Boolean).join(', '),
       elec: d.ElectrificationLevel, turbo, gdi: /direct/i.test(d.FuelInjectionType || ''), cyl: d.EngineCylinders };
